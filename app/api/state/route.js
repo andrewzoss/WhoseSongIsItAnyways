@@ -14,9 +14,9 @@ export async function GET() {
       getClaims(),
       getAllGuesses(game.players),
     ]);
-    // Strip the pass hash before sending to client — admin auth happens server-side.
-    const { adminPassHash, ...gameForClient } = game;
-    return NextResponse.json({ ok: true, game: gameForClient, claims, guesses });
+    // adminName is fine to send to client - it's just a name. (Previously we
+    // stripped a passcode hash here; with name-based admin, no secrets exist.)
+    return NextResponse.json({ ok: true, game, claims, guesses });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
   }

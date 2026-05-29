@@ -25,6 +25,11 @@ function extractPlaylistId(url) {
   return m ? m[1] : null;
 }
 
+// Persist the selected player name on this device so refresh keeps you in role.
+const ME_KEY = 'wsia_me';
+const getMe = () => { try { return localStorage.getItem(ME_KEY); } catch { return null; } };
+const setMe = (n) => { try { n ? localStorage.setItem(ME_KEY, n) : localStorage.removeItem(ME_KEY); } catch {} };
+
 // ============ MAIN APP ============
 export default function Page() {
   const [view, setView] = useState('loading');
@@ -32,7 +37,6 @@ export default function Page() {
   const [claims, setClaims] = useState({});
   const [allGuesses, setAllGuesses] = useState({});
   const [currentPlayer, setCurrentPlayer] = useState(null);
-  const [adminPass, setAdminPass] = useState(null);  // remembered so admin doesn't re-enter for every action
   const [error, setError] = useState('');
 
   const refreshState = useCallback(async () => {
@@ -53,13 +57,34 @@ export default function Page() {
     (async () => {
       const g = await refreshState();
       if (!mounted) return;
-      if (!g) setView('welcome');
-      else if (g.revealed) setView('results');
-      else setView('join');
+      const savedMe = getMe();
+      if (!g) {
+        setView('welcome');
+      } else if (savedMe && g.players.includes(savedMe)) {
+        // resume as that player
+        setCurrentPlayer(savedMe);
+        setView(g.revealed ? 'results' : 'playerGame');
+      } else {
+        setView('join');
+      }
     })();
     const id = setInterval(() => { refreshState(); }, 4000);
     return () => { mounted = false; clearInterval(id); };
   }, [refreshState]);
+
+  const enterAs = (name) => {
+    setMe(name);
+    setCurrentPlayer(name);
+    setView(game?.revealed ? 'results' : 'playerGame');
+  };
+
+  const leaveRole = () => {
+    setMe(null);
+    setCurrentPlayer(null);
+    setView('join');
+  };
+
+  const isMeAdmin = !!(game && currentPlayer && game.adminName === currentPlayer);
 
   const renderView = () => {
     if (view === 'loading') return <LoadingView />;
@@ -68,10 +93,11 @@ export default function Page() {
       return (
         <AdminSetupView
           existingGame={game}
-          onComplete={async (passUsed) => {
+          onComplete={async (chosenAdmin) => {
             await refreshState();
-            setAdminPass(passUsed);
-            setView('adminPanel');
+            setMe(chosenAdmin);
+            setCurrentPlayer(chosenAdmin);
+            setView('playerGame');
           }}
           onCancel={() => setView(game ? 'join' : 'welcome')}
         />
@@ -82,17 +108,7 @@ export default function Page() {
           game={game}
           claims={claims}
           allGuesses={allGuesses}
-          onJoinAsPlayer={(name) => { setCurrentPlayer(name); setView('playerGame'); }}
-          onJoinAsAdmin={(pass) => { setAdminPass(pass); setView('adminPanel'); }}
-          onWipeGame={async (pass) => {
-            try {
-              await apiPost('/api/reset', { adminPass: pass });
-              await refreshState();
-              setView('welcome');
-              setCurrentPlayer(null);
-              setAdminPass(null);
-            } catch (e) { alert(e.message); }
-          }}
+          onJoin={enterAs}
         />
       );
     if (view === 'playerGame')
@@ -102,36 +118,25 @@ export default function Page() {
           claims={claims}
           allGuesses={allGuesses}
           currentPlayer={currentPlayer}
-          onLeave={() => { setCurrentPlayer(null); setView('join'); }}
+          isAdmin={isMeAdmin}
+          onLeave={leaveRole}
           onUpdate={refreshState}
-        />
-      );
-    if (view === 'adminPanel')
-      return (
-        <AdminPanelView
-          game={game}
-          claims={claims}
-          allGuesses={allGuesses}
-          adminPass={adminPass}
-          onLeave={() => { setAdminPass(null); setView('join'); }}
           onReveal={async () => {
-            await apiPost('/api/reveal', { adminPass, revealed: true });
-            await refreshState();
-            setView('results');
-          }}
-          onUnreveal={async () => {
-            await apiPost('/api/reveal', { adminPass, revealed: false });
-            await refreshState();
+            try {
+              await apiPost('/api/reveal', { actor: currentPlayer, revealed: true });
+              await refreshState();
+              setView('results');
+            } catch (e) { alert(e.message); }
           }}
           onReset={async () => {
-            if (confirm('Reset the entire round? This deletes all data.')) {
-              try {
-                await apiPost('/api/reset', { adminPass });
-                await refreshState();
-                setAdminPass(null);
-                setView('welcome');
-              } catch (e) { alert(e.message); }
-            }
+            if (!confirm('Reset the entire round? This deletes all data.')) return;
+            try {
+              await apiPost('/api/reset', { actor: currentPlayer });
+              setMe(null);
+              setCurrentPlayer(null);
+              await refreshState();
+              setView('welcome');
+            } catch (e) { alert(e.message); }
           }}
         />
       );
@@ -141,7 +146,26 @@ export default function Page() {
           game={game}
           claims={claims}
           allGuesses={allGuesses}
-          onBack={() => setView(adminPass ? 'adminPanel' : 'join')}
+          isAdmin={isMeAdmin}
+          currentPlayer={currentPlayer}
+          onBack={() => setView(currentPlayer ? 'playerGame' : 'join')}
+          onUnreveal={async () => {
+            try {
+              await apiPost('/api/reveal', { actor: currentPlayer, revealed: false });
+              await refreshState();
+              setView('playerGame');
+            } catch (e) { alert(e.message); }
+          }}
+          onReset={async () => {
+            if (!confirm('Reset the entire round? This deletes all data.')) return;
+            try {
+              await apiPost('/api/reset', { actor: currentPlayer });
+              setMe(null);
+              setCurrentPlayer(null);
+              await refreshState();
+              setView('welcome');
+            } catch (e) { alert(e.message); }
+          }}
         />
       );
     return null;
@@ -161,6 +185,7 @@ export default function Page() {
           {game && (
             <div className="ml-badge">
               {game.revealed ? 'Revealed' : 'In Progress'} · {game.tracks.length} tracks
+              {currentPlayer && <> · You: {currentPlayer}{isMeAdmin && ' ★'}</>}
             </div>
           )}
         </header>
@@ -186,7 +211,6 @@ export default function Page() {
 }
 
 // ============ SUB-VIEWS ============
-
 function LoadingView() {
   return (
     <div className="ml-card" style={{ textAlign: 'center', padding: '60px 28px' }}>
@@ -202,9 +226,9 @@ function WelcomeView({ onCreate }) {
       <div className="ml-section-label">Round 01</div>
       <h1 className="ml-heading">Who picked <em>what</em>?</h1>
       <p className="ml-body">
-        No round is set up yet. As the admin, you&apos;ll load a Spotify playlist, list the players,
-        and set a passcode so only you can reveal the answers. Players then claim their own song
-        and guess who submitted each of the others.
+        No round is set up yet. The admin loads a Spotify playlist, lists the players,
+        and picks who the admin is. Players then claim their own song and guess who submitted
+        each of the others.
       </p>
       <button className="ml-btn ml-btn-primary" onClick={onCreate}>
         Set up a new round →
@@ -213,13 +237,8 @@ function WelcomeView({ onCreate }) {
   );
 }
 
-function JoinView({ game, claims, allGuesses, onJoinAsPlayer, onJoinAsAdmin, onWipeGame }) {
+function JoinView({ game, claims, allGuesses, onJoin }) {
   const [name, setName] = useState('');
-  const [pass, setPass] = useState('');
-  const [adminErr, setAdminErr] = useState('');
-  const [tab, setTab] = useState('player');
-  const [wipeMode, setWipeMode] = useState(false);
-  const [wipePass, setWipePass] = useState('');
 
   const playerStatus = (p) => {
     const hasClaim = Object.values(claims).includes(p);
@@ -228,105 +247,39 @@ function JoinView({ game, claims, allGuesses, onJoinAsPlayer, onJoinAsAdmin, onW
     return { hasClaim, guessCount, need };
   };
 
-  const tryAdmin = async () => {
-    setAdminErr('');
-    try {
-      // Verify pass by calling /api/reveal with current value (no-op if same)
-      await apiPost('/api/reveal', { adminPass: pass, revealed: game.revealed });
-      onJoinAsAdmin(pass);
-    } catch (e) {
-      setAdminErr(e.message);
-    }
-  };
-
   return (
-    <>
-      <div className="ml-card">
-        <div className="ml-section-label">Round in progress</div>
-        <h1 className="ml-heading">{game.playlistName || 'A mysterious playlist'}</h1>
-        <p className="ml-body">
-          {game.tracks.length} tracks · {game.players.length} players in the running
-        </p>
+    <div className="ml-card">
+      <div className="ml-section-label">Round in progress</div>
+      <h1 className="ml-heading">{game.playlistName || 'A mysterious playlist'}</h1>
+      <p className="ml-body">
+        {game.tracks.length} tracks · {game.players.length} players in the running
+        {game.adminName && <> · Admin: <em>{game.adminName}</em></>}
+      </p>
 
-        <div className="ml-tab-row">
-          <button className={`ml-tab ${tab === 'player' ? 'active' : ''}`} onClick={() => setTab('player')}>
-            I&apos;m a player
-          </button>
-          <button className={`ml-tab ${tab === 'admin' ? 'active' : ''}`} onClick={() => setTab('admin')}>
-            I&apos;m the admin
-          </button>
-        </div>
-
-        {tab === 'player' && (
-          <>
-            <label className="ml-label">Pick your name</label>
-            <select className="ml-select" value={name} onChange={(e) => setName(e.target.value)}>
-              <option value="">— choose —</option>
-              {game.players.map((p) => {
-                const s = playerStatus(p);
-                const tag = s.hasClaim && s.guessCount >= s.need ? ' ✓ done' : s.hasClaim ? ' (claimed)' : '';
-                return <option key={p} value={p}>{p}{tag}</option>;
-              })}
-            </select>
-            <div style={{ marginTop: 14 }}>
-              <button className="ml-btn ml-btn-primary" disabled={!name} onClick={() => onJoinAsPlayer(name)}>
-                Enter as {name || '…'} →
-              </button>
-            </div>
-          </>
-        )}
-
-        {tab === 'admin' && (
-          <>
-            <label className="ml-label">Admin passcode</label>
-            <input
-              type="password"
-              className="ml-input"
-              value={pass}
-              onChange={(e) => { setPass(e.target.value); setAdminErr(''); }}
-              onKeyDown={(e) => e.key === 'Enter' && tryAdmin()}
-              placeholder="••••••••"
-            />
-            {adminErr && <div className="ml-error" style={{ marginTop: 10 }}>{adminErr}</div>}
-            <div style={{ marginTop: 14 }}>
-              <button className="ml-btn ml-btn-primary" disabled={!pass} onClick={tryAdmin}>
-                Unlock admin panel →
-              </button>
-            </div>
-          </>
-        )}
+      <label className="ml-label">Who are you?</label>
+      <select className="ml-select" value={name} onChange={(e) => setName(e.target.value)}>
+        <option value="">— pick your name —</option>
+        {game.players.map((p) => {
+          const s = playerStatus(p);
+          const isAdminP = p === game.adminName;
+          const tag = s.hasClaim && s.guessCount >= s.need ? ' ✓ done' : s.hasClaim ? ' (claimed)' : '';
+          return (
+            <option key={p} value={p}>
+              {p}{isAdminP ? ' ★' : ''}{tag}
+            </option>
+          );
+        })}
+      </select>
+      <div style={{ marginTop: 14 }}>
+        <button className="ml-btn ml-btn-primary" disabled={!name} onClick={() => onJoin(name)}>
+          Enter as {name || '…'} →
+        </button>
       </div>
 
-      <div className="ml-footer-actions">
-        <div style={{ fontSize: 12, color: 'var(--text-faint)', fontFamily: 'JetBrains Mono, monospace' }}>
-          Share this URL with your league
-        </div>
-        {!wipeMode ? (
-          <button className="ml-btn ml-btn-ghost ml-btn-danger" onClick={() => setWipeMode(true)}>
-            Wipe round
-          </button>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="password"
-              className="ml-input"
-              value={wipePass}
-              placeholder="Admin pass"
-              onChange={(e) => setWipePass(e.target.value)}
-              style={{ width: 160 }}
-            />
-            <button
-              className="ml-btn ml-btn-danger"
-              disabled={!wipePass}
-              onClick={() => onWipeGame(wipePass)}
-            >Confirm</button>
-            <button className="ml-btn ml-btn-ghost" onClick={() => { setWipeMode(false); setWipePass(''); }}>
-              Cancel
-            </button>
-          </div>
-        )}
+      <div style={{ marginTop: 18, fontSize: 12, color: 'var(--text-faint)', fontFamily: 'JetBrains Mono, monospace' }}>
+        Share this page&apos;s URL with your league.
       </div>
-    </>
+    </div>
   );
 }
 
@@ -335,79 +288,44 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
   const [step, setStep] = useState(1);
   const [playlistUrl, setPlaylistUrl] = useState(existingGame?.playlistUrl || '');
   const [playlistName, setPlaylistName] = useState(existingGame?.playlistName || '');
-  const [tracks, setTracks] = useState(existingGame?.tracks || []);
   const [playersText, setPlayersText] = useState((existingGame?.players || []).join('\n'));
-  const [adminPass, setAdminPass] = useState('');
-  const [adminPassConfirm, setAdminPassConfirm] = useState('');
+  const [adminName, setAdminName] = useState(existingGame?.adminName || '');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Spotify credentials
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [showSecret, setShowSecret] = useState(false);
   const [saveCreds, setSaveCreds] = useState(true);
 
-  // Fetch flow state
   const [manualMode, setManualMode] = useState(false);
   const [manualText, setManualText] = useState('');
 
-  const fetchTracks = async () => {
-    setErr(''); setLoading(true);
-    try {
-      const lines = manualMode
-        ? manualText.split('\n').map((l) => l.trim()).filter(Boolean)
-        : null;
+  // Derived list of players for the admin dropdown
+  const parsedPlayers = playersText
+    .split('\n')
+    .map((p) => p.trim())
+    .filter(Boolean);
 
-      const manualTracks = lines
-        ? lines.map((line) => {
-            const dash = line.indexOf(' - ');
-            return dash > 0
-              ? { name: line.slice(0, dash).trim(), artists: line.slice(dash + 3).trim() }
-              : { name: line, artists: '' };
-          })
-        : null;
-
-      // We don't have a separate "fetch only" endpoint — we go straight to /api/setup
-      // BUT players + passcode are required there. So we just store input locally and
-      // fetch as part of the final setup. For preview, we hit a separate route? No —
-      // simpler: just preview tracks by calling Spotify via a lightweight check at finalize time.
-      // For now: skip preview, validate at finalize. Move directly to player step.
-      // (Or: do a separate POST to /api/setup-preview — but keeping API surface small.)
-
-      if (manualTracks) {
-        setTracks(manualTracks.map((t, i) => ({ id: `m-${i}`, name: t.name, artists: t.artists, albumArt: null })));
-        if (!playlistName) setPlaylistName('Round playlist');
-        setStep(3);
-      } else {
-        // Validate URL + creds locally before continuing
-        if (!extractPlaylistId(playlistUrl)) throw new Error('Invalid Spotify playlist URL.');
-        if (!clientId.trim() || !clientSecret.trim()) throw new Error('Need Client ID and Secret.');
-        // Preview by calling Spotify directly through... we don't have a preview endpoint.
-        // Strategy: just proceed to step 3, and the actual Spotify call happens on final submit.
-        setTracks([]);  // we'll show the count after submit
-        setStep(3);
-      }
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // If admin name no longer matches a player, clear it.
+  useEffect(() => {
+    if (adminName && !parsedPlayers.includes(adminName)) setAdminName('');
+  }, [playersText]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const finalize = async () => {
     setErr('');
-    const players = playersText.split('\n').map((p) => p.trim()).filter(Boolean);
-    if (players.length < 2) { setErr('Need at least 2 players.'); return; }
-    if (adminPass.length < 4) { setErr('Admin passcode must be at least 4 characters.'); return; }
-    if (adminPass !== adminPassConfirm) { setErr('Passcodes do not match.'); return; }
+    if (parsedPlayers.length < 2) { setErr('Need at least 2 players.'); return; }
+    if (!adminName || !parsedPlayers.includes(adminName)) {
+      setErr('Pick which player is the admin.');
+      return;
+    }
 
     setLoading(true);
     try {
       const body = {
         playlistUrl,
-        players,
-        adminPass,
+        players: parsedPlayers,
+        adminName,
         saveCreds,
       };
       if (manualMode) {
@@ -423,8 +341,8 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
         body.clientId = clientId.trim();
         body.clientSecret = clientSecret.trim();
       }
-      const res = await apiPost('/api/setup', body);
-      onComplete(adminPass);
+      await apiPost('/api/setup', body);
+      onComplete(adminName);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -437,8 +355,8 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
       <div className="ml-section-label">Admin setup · Step {step} of 3</div>
       <h1 className="ml-heading">
         {step === 1 ? <>Drop the <em>playlist</em></> :
-         step === 2 ? <>Confirm the <em>tracks</em></> :
-         <>Players & <em>passcode</em></>}
+         step === 2 ? <>Paste the <em>tracks</em></> :
+         <>Players & <em>admin</em></>}
       </h1>
 
       {err && <div className="ml-error">{err}</div>}
@@ -574,7 +492,7 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
             {manualMode
               ? <>Tracks will be loaded from your pasted list.</>
               : <>Tracks will be fetched from Spotify when you finish setup. (Takes ~5 seconds.)</>}
-            {' '}Now list your players and set an admin passcode.
+            {' '}List your players (one per line), then pick which player is the admin.
           </p>
 
           <label className="ml-label">Players (one per line)</label>
@@ -586,36 +504,31 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
             rows={6}
           />
 
-          <div className="ml-grid-2" style={{ marginTop: 16 }}>
-            <div>
-              <label className="ml-label">Admin passcode</label>
-              <input
-                type="password"
-                className="ml-input"
-                value={adminPass}
-                onChange={(e) => setAdminPass(e.target.value)}
-                placeholder="At least 4 characters"
-              />
-            </div>
-            <div>
-              <label className="ml-label">Confirm passcode</label>
-              <input
-                type="password"
-                className="ml-input"
-                value={adminPassConfirm}
-                onChange={(e) => setAdminPassConfirm(e.target.value)}
-              />
-            </div>
-          </div>
+          <label className="ml-label" style={{ marginTop: 14 }}>Who&apos;s the admin?</label>
+          <select
+            className="ml-select"
+            value={adminName}
+            onChange={(e) => setAdminName(e.target.value)}
+            disabled={parsedPlayers.length < 2}
+          >
+            <option value="">— pick the admin —</option>
+            {parsedPlayers.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
 
           <div className="ml-info-box" style={{ marginTop: 16 }}>
-            <strong style={{ color: 'var(--gold)' }}>Tip:</strong> the passcode protects the
-            <em> reveal results</em> button. Don&apos;t share it with the players.
+            <strong style={{ color: 'var(--gold)' }}>Heads up:</strong> the admin (★) is the only player
+            who can reveal results or reset the round. Anyone visiting the URL could technically pick the
+            admin&apos;s name from the dropdown — for a friend-group league this is fine, but don&apos;t
+            share the URL more widely than you trust.
           </div>
 
           <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button className="ml-btn ml-btn-ghost" onClick={() => setStep(manualMode ? 2 : 1)}>← Back</button>
-            <button className="ml-btn ml-btn-primary" disabled={loading} onClick={finalize}>
+            <button
+              className="ml-btn ml-btn-primary"
+              disabled={loading || parsedPlayers.length < 2 || !adminName}
+              onClick={finalize}
+            >
               {loading ? <><span className="ml-spinner" /> Setting up…</> : 'Start the round →'}
             </button>
           </div>
@@ -626,7 +539,7 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
 }
 
 // ============ PLAYER GAME ============
-function PlayerGameView({ game, claims, allGuesses, currentPlayer, onLeave, onUpdate }) {
+function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLeave, onUpdate, onReveal, onReset }) {
   const myClaim = Object.entries(claims).find(([, p]) => p === currentPlayer)?.[0] || null;
   const myGuesses = allGuesses[currentPlayer] || {};
   const [saving, setSaving] = useState(false);
@@ -652,10 +565,20 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, onLeave, onUp
   const guessedCount = Object.keys(myGuesses).filter((tid) => tid !== myClaim).length;
   const progress = guessableCount > 0 ? (guessedCount / guessableCount) * 100 : 0;
 
+  // Admin: compute completion stats
+  const totalPlayers = game.players.length;
+  const claimedPlayers = new Set(Object.values(claims));
+  const fullyDonePlayers = game.players.filter((p) => {
+    if (!claimedPlayers.has(p)) return false;
+    const g = allGuesses[p] || {};
+    return Object.keys(g).length >= game.tracks.length - 1;
+  });
+  const everyTrackClaimed = game.tracks.every((t) => claims[t.id]);
+
   return (
     <>
       <div className="ml-card">
-        <div className="ml-section-label">Playing as · {currentPlayer}</div>
+        <div className="ml-section-label">Playing as · {currentPlayer}{isAdmin && ' ★ admin'}</div>
         <h1 className="ml-heading">Claim yours. <em>Guess</em> the rest.</h1>
         <p className="ml-body">
           Pick the song <em>you</em> submitted (yellow button), then guess who submitted each other track.
@@ -674,6 +597,54 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, onLeave, onUp
           <div className="ml-progress-bar" style={{ width: `${progress}%` }} />
         </div>
       </div>
+
+      {isAdmin && (
+        <div className="ml-card">
+          <div className="ml-section-label">Admin panel</div>
+          <h2 className="ml-heading" style={{ fontSize: 22 }}>Watch the <em>guesses</em> roll in</h2>
+
+          <div className="ml-stats">
+            <div className="ml-stat"><span className="ml-stat-val">{Object.keys(claims).length}/{totalPlayers}</span> claimed</div>
+            <div className="ml-stat"><span className="ml-stat-val">{fullyDonePlayers.length}/{totalPlayers}</span> finished</div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            {game.players.map((p) => {
+              const hasClaim = claimedPlayers.has(p);
+              const guessCount = Object.keys(allGuesses[p] || {}).length;
+              const need = game.tracks.length - 1;
+              const done = hasClaim && guessCount >= need;
+              return (
+                <span key={p} className={`ml-player-tag ${done ? 'done' : ''}`}>
+                  {done ? '✓' : '•'} {p}
+                  {!done && (
+                    <span style={{ opacity: 0.6 }}>
+                      ({hasClaim ? '★' : '–'}/{guessCount}/{need})
+                    </span>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+
+          {!everyTrackClaimed && (
+            <div className="ml-info-box" style={{ marginTop: 16 }}>
+              <strong style={{ color: 'var(--gold)' }}>Heads up:</strong>{' '}
+              {game.tracks.length - Object.keys(claims).length} track(s) still unclaimed.
+              You can reveal anyway — those rows will show &quot;unknown&quot; as the truth.
+            </div>
+          )}
+
+          <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="ml-btn ml-btn-primary" onClick={onReveal}>
+              Reveal results →
+            </button>
+            <button className="ml-btn ml-btn-ghost ml-btn-danger" onClick={onReset}>
+              Reset round
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="ml-card-flush">
         {game.tracks.map((track, i) => {
@@ -730,119 +701,8 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, onLeave, onUp
   );
 }
 
-// ============ ADMIN PANEL ============
-function AdminPanelView({ game, claims, allGuesses, adminPass, onLeave, onReveal, onUnreveal, onReset }) {
-  const totalPlayers = game.players.length;
-  const claimedPlayers = new Set(Object.values(claims));
-  const fullyDonePlayers = game.players.filter((p) => {
-    if (!claimedPlayers.has(p)) return false;
-    const guesses = allGuesses[p] || {};
-    return Object.keys(guesses).length >= game.tracks.length - 1;
-  });
-  const everyTrackClaimed = game.tracks.every((t) => claims[t.id]);
-
-  return (
-    <>
-      <div className="ml-card">
-        <div className="ml-section-label">Admin panel · {game.playlistName}</div>
-        <h1 className="ml-heading">Watch the <em>guesses</em> roll in</h1>
-
-        <div className="ml-stats">
-          <div className="ml-stat"><span className="ml-stat-val">{game.tracks.length}</span> tracks</div>
-          <div className="ml-stat"><span className="ml-stat-val">{Object.keys(claims).length}/{totalPlayers}</span> claimed</div>
-          <div className="ml-stat"><span className="ml-stat-val">{fullyDonePlayers.length}/{totalPlayers}</span> finished</div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          {game.players.map((p) => {
-            const hasClaim = claimedPlayers.has(p);
-            const guessCount = Object.keys(allGuesses[p] || {}).length;
-            const need = game.tracks.length - 1;
-            const done = hasClaim && guessCount >= need;
-            return (
-              <span key={p} className={`ml-player-tag ${done ? 'done' : ''}`}>
-                {done ? '✓' : '•'} {p}
-                {!done && (
-                  <span style={{ opacity: 0.6 }}>
-                    ({hasClaim ? '★' : '–'}/{guessCount}/{need})
-                  </span>
-                )}
-              </span>
-            );
-          })}
-        </div>
-
-        {!everyTrackClaimed && (
-          <div className="ml-info-box" style={{ marginTop: 16 }}>
-            <strong style={{ color: 'var(--gold)' }}>Heads up:</strong>{' '}
-            {game.tracks.length - Object.keys(claims).length} track(s) are still unclaimed.
-            You can still reveal — those rows will show &quot;unknown&quot; as the truth.
-          </div>
-        )}
-
-        <div className="ml-divider" />
-
-        {!game.revealed ? (
-          <>
-            <p className="ml-body">
-              When everyone&apos;s locked in their guesses, hit reveal. Players will instantly see results
-              and the scoreboard.
-            </p>
-            <button className="ml-btn ml-btn-primary" onClick={onReveal}>
-              Reveal results →
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="ml-success">Results are revealed and visible to all players.</div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button className="ml-btn" onClick={onUnreveal}>Un-reveal</button>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="ml-card">
-        <div className="ml-section-label">Live claims</div>
-        <h2 className="ml-heading" style={{ fontSize: 22 }}>What players say is <em>theirs</em></h2>
-        <div style={{ marginTop: 14 }}>
-          {game.tracks.map((t, i) => (
-            <div key={t.id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '8px 0', borderBottom: '1px solid var(--line)', gap: 10,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--text-faint)' }}>
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <em style={{ color: 'var(--text)' }}>{t.name}</em>
-                  <span style={{ color: 'var(--text-faint)', fontSize: 13 }}> — {t.artists}</span>
-                </span>
-              </div>
-              <span style={{
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 12,
-                color: claims[t.id] ? 'var(--accent-2)' : 'var(--text-faint)', whiteSpace: 'nowrap',
-              }}>
-                {claims[t.id] || '— unclaimed —'}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="ml-footer-actions">
-        <button className="ml-btn ml-btn-ghost" onClick={onLeave}>← Leave admin</button>
-        <button className="ml-btn ml-btn-ghost ml-btn-danger" onClick={onReset}>
-          Reset round
-        </button>
-      </div>
-    </>
-  );
-}
-
 // ============ RESULTS ============
-function ResultsView({ game, claims, allGuesses, onBack }) {
+function ResultsView({ game, claims, allGuesses, isAdmin, currentPlayer, onBack, onUnreveal, onReset }) {
   const scores = {};
   game.players.forEach((p) => { scores[p] = 0; });
   game.tracks.forEach((t) => {
@@ -884,6 +744,13 @@ function ResultsView({ game, claims, allGuesses, onBack }) {
             );
           })}
         </div>
+
+        {isAdmin && (
+          <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="ml-btn" onClick={onUnreveal}>Un-reveal</button>
+            <button className="ml-btn ml-btn-ghost ml-btn-danger" onClick={onReset}>Reset round</button>
+          </div>
+        )}
       </div>
 
       <div className="ml-card-flush">
