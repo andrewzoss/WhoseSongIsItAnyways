@@ -10,8 +10,8 @@ All state is shared across players in real time via Upstash Redis — no silos.
 
 ## Deploy in ~10 minutes
 
-You'll need free accounts at **GitHub**, **Vercel**, and **Upstash**, plus your
-Spotify Client ID & Secret (from the Spotify Developer Dashboard).
+You'll need free accounts at **GitHub**, **Vercel**, and **Upstash**. No Spotify
+developer setup required — we pull track data from Spotify's public embed pages.
 
 ### 1) Put the code on GitHub
 1. Go to <https://github.com/new>, name the repo, click **Create repository**
@@ -34,9 +34,9 @@ Spotify Client ID & Secret (from the Spotify Developer Dashboard).
 
 ### 4) Use it
 1. Open the URL → **Set up a new round**
-2. Paste the playlist URL + your Spotify Client ID & Secret
+2. Paste the Music League playlist URL → Next
 3. List players, pick who the admin is (you!), start the round
-4. Share the URL. Everyone picks their name; only the admin sees Reveal/Reset
+4. Share the URL with the league. Everyone picks their name; only the admin sees Reveal/Reset
 
 ---
 
@@ -44,8 +44,8 @@ Spotify Client ID & Secret (from the Spotify Developer Dashboard).
 
 There's no passcode. The admin is just one of the player names — whoever is
 designated during setup. When that person picks their name from the dropdown,
-they see the admin panel inline with their player view. Anyone else just sees
-the player view.
+they see admin controls (Reveal, Reset, live progress stats) on their player
+view, marked with ★. Everyone else just sees the player view.
 
 Technically, anyone with the URL could pick the admin's name from the list and
 gain admin powers. For a friend-group league this is fine. Don't share the URL
@@ -53,8 +53,7 @@ with people you wouldn't trust to behave.
 
 ## Updating later
 
-Push changes to GitHub → Vercel auto-deploys within ~1 minute. To edit a file:
-GitHub → open the file → pencil icon → make changes → Commit.
+Push changes to GitHub → Vercel auto-deploys within ~1 minute.
 
 ## Project layout
 
@@ -77,14 +76,12 @@ whose-song-is-it/
 │       └── reset/route.js   # POST admin wipe round
 └── lib/
     ├── db.js                # Upstash Redis helpers
-    └── spotify.js           # Spotify Client Credentials flow
+    └── spotify.js           # public embed-page scraper
 ```
 
 ## Troubleshooting
 
-- **"Failed to fetch tracks (403)"** — Spotify is refusing to serve the playlist.
-  - Most common: the playlist isn't truly public. Right-click in Spotify → Share → "Copy link to playlist" and open that URL in an incognito window. If you can see the tracks, it's public. If not, switch it to public.
-  - Less common: Client Secret has a typo. Try regenerating the secret in your Spotify Developer Dashboard (Settings → "Rotate client secret") and pasting the new one in fresh.
-- **"Spotify rejected the credentials"** — Client ID or Secret is wrong or has extra whitespace.
+- **"Playlist not found"** — make sure it's public. Right-click in Spotify → Share → Copy link to playlist. Open the URL in an incognito window: if the tracks load, it's public.
+- **"Could not find playlist data in the embed page"** — rare, but means Spotify changed their embed structure. Tell me and I'll update the parser.
 - **"Redis not configured"** — env variables missing in Vercel. Project Settings → Environment Variables → check both Upstash values, then redeploy.
 - **Players don't see updates** — the app polls every 4 seconds. If stuck, refresh.

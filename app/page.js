@@ -293,11 +293,6 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const [clientId, setClientId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
-  const [showSecret, setShowSecret] = useState(false);
-  const [saveCreds, setSaveCreds] = useState(true);
-
   const [manualMode, setManualMode] = useState(false);
   const [manualText, setManualText] = useState('');
 
@@ -326,7 +321,6 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
         playlistUrl,
         players: parsedPlayers,
         adminName,
-        saveCreds,
       };
       if (manualMode) {
         const lines = manualText.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -337,9 +331,6 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
             : { name: line, artists: '' };
         });
         body.playlistName = playlistName || 'Round playlist';
-      } else {
-        body.clientId = clientId.trim();
-        body.clientSecret = clientSecret.trim();
       }
       await apiPost('/api/setup', body);
       onComplete(adminName);
@@ -370,73 +361,17 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
             onChange={(e) => setPlaylistUrl(e.target.value)}
             placeholder="https://open.spotify.com/playlist/..."
           />
-
-          <div className="ml-divider" />
-
-          <div className="ml-section-label" style={{ marginBottom: 12 }}>Spotify credentials</div>
-          <p className="ml-body" style={{ fontSize: 14 }}>
-            We pull tracks straight from Spotify&apos;s API. Get your credentials from{' '}
-            <a
-              href="https://developer.spotify.com/dashboard"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--accent-2)', textDecoration: 'underline' }}
-            >developer.spotify.com/dashboard</a>{' '}
-            → your app → Settings → &quot;View client secret.&quot;
+          <p className="ml-body" style={{ fontSize: 14, marginTop: 14 }}>
+            Public playlists work — including Music League playlists you don&apos;t own.
+            We pull track titles, artists, and album art straight from Spotify&apos;s public
+            embed page. No login, no credentials, no developer setup.
           </p>
-
-          <label className="ml-label">Client ID</label>
-          <input
-            className="ml-input"
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="(your Spotify Client ID)"
-            style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13 }}
-          />
-
-          <label className="ml-label" style={{ marginTop: 12 }}>Client Secret</label>
-          <div style={{ position: 'relative' }}>
-            <input
-              className="ml-input"
-              type={showSecret ? 'text' : 'password'}
-              value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              placeholder="••••••••••••••••"
-              style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, paddingRight: 56 }}
-            />
-            <button
-              type="button"
-              onClick={() => setShowSecret((s) => !s)}
-              style={{
-                position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
-                background: 'transparent', border: '1px solid var(--line)', color: 'var(--text-dim)',
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                padding: '4px 8px', borderRadius: 4, cursor: 'pointer',
-                textTransform: 'uppercase', letterSpacing: '0.1em',
-              }}
-            >
-              {showSecret ? 'Hide' : 'Show'}
-            </button>
-          </div>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, fontSize: 13.5, color: 'var(--text-dim)', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={saveCreds}
-              onChange={(e) => setSaveCreds(e.target.checked)}
-              style={{ accentColor: 'var(--accent)' }}
-            />
-            Remember these on the server for future rounds
-          </label>
-          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-faint)', fontStyle: 'italic' }}>
-            Stored only in your private Upstash database, never exposed to players.
-          </div>
 
           <div style={{ marginTop: 18, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button className="ml-btn ml-btn-ghost" onClick={onCancel}>← Back</button>
             <button
               className="ml-btn ml-btn-primary"
-              disabled={!extractPlaylistId(playlistUrl) || !clientId.trim() || !clientSecret.trim()}
+              disabled={!extractPlaylistId(playlistUrl)}
               onClick={() => { setManualMode(false); setStep(3); }}
             >
               Next →

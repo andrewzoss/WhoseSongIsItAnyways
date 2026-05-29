@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { setGame, setClaims, setSpotifyCreds, getSpotifyCreds, resetGameData, sanitizeName } from '@/lib/db';
+import { setGame, setClaims, resetGameData, sanitizeName } from '@/lib/db';
 import { fetchPlaylist, extractPlaylistId } from '@/lib/spotify';
 
 export const dynamic = 'force-dynamic';
@@ -8,15 +8,7 @@ export const runtime = 'nodejs';
 export async function POST(req) {
   try {
     const body = await req.json();
-    const {
-      playlistUrl,
-      clientId,
-      clientSecret,
-      manualTracks,
-      players,
-      adminName,
-      saveCreds = true,
-    } = body || {};
+    const { playlistUrl, manualTracks, players, adminName } = body || {};
 
     if (!Array.isArray(players) || players.length < 2) {
       return NextResponse.json({ ok: false, error: 'Need at least 2 players.' }, { status: 400 });
@@ -53,26 +45,12 @@ export async function POST(req) {
         return NextResponse.json({ ok: false, error: 'Manual tracks list was empty.' }, { status: 400 });
       }
     } else {
-      let cid = clientId, cs = clientSecret;
-      if (!cid || !cs) {
-        const stored = await getSpotifyCreds();
-        if (stored) { cid = stored.clientId; cs = stored.clientSecret; }
-      }
-      if (!cid || !cs) {
-        return NextResponse.json(
-          { ok: false, error: 'Need Spotify Client ID and Client Secret.' },
-          { status: 400 }
-        );
-      }
       if (!extractPlaylistId(playlistUrl)) {
         return NextResponse.json({ ok: false, error: 'Invalid playlist URL.' }, { status: 400 });
       }
-
-      const fetched = await fetchPlaylist(playlistUrl, cid, cs);
+      const fetched = await fetchPlaylist(playlistUrl);
       tracks = fetched.tracks;
       playlistName = fetched.playlistName;
-
-      if (saveCreds) await setSpotifyCreds({ clientId: cid, clientSecret: cs });
     }
 
     await resetGameData(players);
