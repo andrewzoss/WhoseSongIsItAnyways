@@ -58,37 +58,32 @@ body {
   border-bottom: 1px solid var(--line);
 }
 .ml-logo { display: flex; align-items: center; gap: 14px; }
-.ml-logo-icon {
-  width: 48px; height: 48px;
-  border-radius: 50%;
-  background: radial-gradient(circle at center, var(--accent) 0%, var(--accent) 18%, #1a1410 19%, #1a1410 22%, #2a1f1a 23%, #2a1f1a 100%);
-  border: 1px solid #4a3d33;
-  position: relative;
+.ml-logo-image {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
   flex-shrink: 0;
-  animation: spin 12s linear infinite;
-  box-shadow: 0 4px 16px rgba(255,107,61,0.2), inset 0 0 20px rgba(0,0,0,0.5);
-}
-.ml-logo-icon::before {
-  content: ''; position: absolute; inset: 8px;
-  border-radius: 50%;
-  border: 1px solid rgba(180,150,120,0.15);
-}
-.ml-logo-icon::after {
-  content: ''; position: absolute; inset: 14px;
-  border-radius: 50%;
-  border: 1px solid rgba(180,150,120,0.1);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .ml-title {
-  font-family: 'Fraunces', serif;
-  font-weight: 600;
-  font-size: 28px;
-  letter-spacing: -0.02em;
+  font-family: 'Caprasimo', 'Cooper Black', Georgia, serif;
+  font-weight: 400;
+  font-size: 34px;
+  letter-spacing: -0.01em;
   line-height: 1;
-  font-variation-settings: "opsz" 144;
+  text-transform: uppercase;
+  color: var(--text);
 }
-.ml-title em { font-style: italic; color: var(--accent); font-weight: 400; }
+.ml-title em {
+  font-style: italic;
+  color: var(--accent);
+  font-weight: 400;
+}
 .ml-subtitle {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;

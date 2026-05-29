@@ -176,10 +176,15 @@ export default function Page() {
       <div className="ml-container">
         <header className="ml-header">
           <div className="ml-logo">
-            <div className="ml-logo-icon" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.png"
+              alt=""
+              className="ml-logo-image"
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
             <div>
               <div className="ml-title">Whose Song is it <em>Anyways?</em></div>
-              <div className="ml-subtitle">Guess the submitter · Settle the round</div>
             </div>
           </div>
           {game && (
@@ -606,7 +611,7 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
                   disabled={saving || (claimedByOther && !isMine)}
                   title={claimedByOther ? `Claimed by ${claims[track.id]}` : ''}
                 >
-                  {isMine ? '★ Mine' : claimedByOther ? 'Taken' : 'Mine?'}
+                  {isMine ? '★ Mine' : claimedByOther ? 'Taken' : 'Mine'}
                 </button>
                 {!isMine && (
                   <select
