@@ -24,6 +24,20 @@ export async function POST(req) {
     }
 
     const guesses = await getGuesses(player);
+
+    // Strict mode: each player can only be guessed once across all tracks.
+    // If this player already used `guess` on a different track, reject.
+    if (guess) {
+      for (const [tid, existing] of Object.entries(guesses)) {
+        if (tid !== trackId && existing === guess) {
+          return NextResponse.json(
+            { ok: false, error: `You already guessed ${guess} on another track. Clear that one first.` },
+            { status: 409 }
+          );
+        }
+      }
+    }
+
     if (guess) guesses[trackId] = guess;
     else delete guesses[trackId];
     await setGuesses(player, guesses);

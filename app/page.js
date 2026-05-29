@@ -121,6 +121,18 @@ export default function Page() {
           isAdmin={isMeAdmin}
           onLeave={leaveRole}
           onUpdate={refreshState}
+          onOpenAdmin={() => setView('adminTools')}
+        />
+      );
+    if (view === 'adminTools')
+      return (
+        <AdminToolsView
+          game={game}
+          claims={claims}
+          allGuesses={allGuesses}
+          currentPlayer={currentPlayer}
+          onUpdate={refreshState}
+          onBack={() => setView('playerGame')}
           onReveal={async () => {
             try {
               await apiPost('/api/reveal', { actor: currentPlayer, revealed: true });
@@ -486,8 +498,266 @@ function AdminSetupView({ onComplete, onCancel, existingGame }) {
   );
 }
 
+// ============ MANAGE PLAYERS (admin only) ============
+function ManagePlayersCard({ game, currentPlayer, onUpdate }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(game.players.join('\n'));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [feedback, setFeedback] = useState('');
+
+  // Keep draft in sync when game.players changes from outside
+  useEffect(() => {
+    if (!open) setDraft(game.players.join('\n'));
+  }, [game.players, open]);
+
+  const submit = async () => {
+    setErr(''); setFeedback(''); setSaving(true);
+    try {
+      const newPlayers = draft.split('\n').map((p) => p.trim()).filter(Boolean);
+      const data = await apiPost('/api/players', {
+        actor: currentPlayer,
+        players: newPlayers,
+      });
+      const bits = [];
+      if (data.added?.length) bits.push(`+ ${data.added.join(', ')}`);
+      if (data.removed?.length) bits.push(`− ${data.removed.join(', ')}`);
+      setFeedback(bits.length ? `Updated: ${bits.join(' · ')}` : 'No changes.');
+      await onUpdate();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = () => {
+    setDraft(game.players.join('\n'));
+    setErr(''); setFeedback('');
+  };
+
+  return (
+    <div className="ml-card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <div>
+          <div className="ml-section-label">Manage players</div>
+          <h2 className="ml-heading" style={{ fontSize: 22, margin: 0 }}>Roster ({game.players.length})</h2>
+        </div>
+        <button className="ml-btn ml-btn-ghost" onClick={() => { setOpen((o) => !o); reset(); }}>
+          {open ? 'Close' : 'Edit'}
+        </button>
+      </div>
+
+      {open && (
+        <>
+          <p className="ml-body" style={{ fontSize: 14, marginTop: 14 }}>
+            Add or remove players one per line. Adding is risk-free. Removing someone
+            deletes their claims and guesses, and removes them from other players&apos;
+            guesses (they&apos;ll need to re-pick if they had guessed the removed
+            player). You can&apos;t remove yourself ({game.adminName}).
+          </p>
+
+          <label className="ml-label">Players (one per line)</label>
+          <textarea
+            className="ml-textarea"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={Math.max(6, game.players.length + 2)}
+            spellCheck={false}
+          />
+
+          {err && <div className="ml-error" style={{ marginTop: 10 }}>{err}</div>}
+          {feedback && <div className="ml-success" style={{ marginTop: 10 }}>{feedback}</div>}
+
+          <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="ml-btn ml-btn-primary" disabled={saving} onClick={submit}>
+              {saving ? <><span className="ml-spinner" /> Saving…</> : 'Save roster'}
+            </button>
+            <button className="ml-btn ml-btn-ghost" disabled={saving} onClick={reset}>
+              Revert
+            </button>
+          </div>
+        </>
+      )}
+
+      {!open && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+          {game.players.map((p) => (
+            <span key={p} className="ml-player-tag">
+              {p === game.adminName ? '★ ' : ''}{p}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ ADMIN TOOLS (separate page) ============
+function AdminToolsView({ game, claims, allGuesses, currentPlayer, onUpdate, onBack, onReveal, onReset }) {
+  const totalPlayers = game.players.length;
+  const claimedPlayers = new Set(Object.values(claims));
+  const fullyDonePlayers = game.players.filter((p) => {
+    if (!claimedPlayers.has(p)) return false;
+    const g = allGuesses[p] || {};
+    return Object.keys(g).length >= game.tracks.length - 1;
+  });
+  const everyTrackClaimed = game.tracks.every((t) => claims[t.id]);
+
+  const adminAssign = async (trackId, submitter) => {
+    try {
+      await apiPost('/api/admin-assign', {
+        actor: currentPlayer,
+        trackId,
+        submitter: submitter || null,
+      });
+      await onUpdate();
+    } catch (e) { alert(e.message); }
+  };
+
+  return (
+    <>
+      <div className="ml-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div>
+            <div className="ml-section-label">★ Admin tools</div>
+            <h1 className="ml-heading" style={{ margin: 0 }}>Watch the <em>guesses</em> roll in</h1>
+          </div>
+          <button className="ml-btn ml-btn-ghost" onClick={onBack}>← Back to playing</button>
+        </div>
+
+        <div className="ml-stats">
+          <div className="ml-stat"><span className="ml-stat-val">{Object.keys(claims).length}/{totalPlayers}</span> claimed</div>
+          <div className="ml-stat"><span className="ml-stat-val">{fullyDonePlayers.length}/{totalPlayers}</span> finished</div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          {game.players.map((p) => {
+            const hasClaim = claimedPlayers.has(p);
+            const guessCount = Object.keys(allGuesses[p] || {}).length;
+            const need = game.tracks.length - 1;
+            const done = hasClaim && guessCount >= need;
+            return (
+              <span key={p} className={`ml-player-tag ${done ? 'done' : ''}`}>
+                {done ? '✓' : '•'} {p}
+                {!done && (
+                  <span style={{ opacity: 0.6 }}>
+                    ({hasClaim ? '★' : '–'}/{guessCount}/{need})
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-faint)', fontFamily: 'JetBrains Mono, monospace' }}>
+          Format: ✓ done · (★ claimed / N guesses / N needed)
+        </div>
+
+        {!everyTrackClaimed && (
+          <div className="ml-info-box" style={{ marginTop: 16 }}>
+            <strong style={{ color: 'var(--gold)' }}>Heads up:</strong>{' '}
+            {game.tracks.length - Object.keys(claims).length} track(s) still unclaimed.
+            You can reveal anyway — those rows will show &quot;unknown&quot; as the truth,
+            or assign them below.
+          </div>
+        )}
+
+        {game.revealed ? (
+          <div className="ml-success" style={{ marginTop: 16 }}>
+            Results are revealed and visible to all players.
+          </div>
+        ) : null}
+
+        <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {!game.revealed && (
+            <button className="ml-btn ml-btn-primary" onClick={onReveal}>
+              Reveal results →
+            </button>
+          )}
+          <button className="ml-btn ml-btn-ghost ml-btn-danger" onClick={onReset}>
+            Reset round
+          </button>
+        </div>
+      </div>
+
+      <ManagePlayersCard
+        game={game}
+        currentPlayer={currentPlayer}
+        onUpdate={onUpdate}
+      />
+
+      <div className="ml-card">
+        <div className="ml-section-label">Truth ledger · override claims</div>
+        <h2 className="ml-heading" style={{ fontSize: 22 }}>Set the <em>real</em> submitter</h2>
+        <p className="ml-body" style={{ fontSize: 14 }}>
+          If someone didn&apos;t claim, or claimed wrong, set the truth here. This is what
+          scoring uses at reveal time — your overrides take precedence over player claims.
+        </p>
+        <div className="ml-info-box" style={{ marginTop: 12 }}>
+          <strong style={{ color: 'var(--gold)' }}>Spoiler warning:</strong> the dropdowns below
+          show what each player claimed. Don&apos;t open this section if you still want to play
+          fair on your own guesses.
+        </div>
+        <div style={{ marginTop: 16 }}>
+          {game.tracks.map((t, i) => {
+            const truth = claims[t.id] || '';
+            const isUnclaimed = !truth;
+            return (
+              <div key={t.id} style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '10px 0', borderBottom: '1px solid var(--line)',
+                flexWrap: 'wrap',
+              }}>
+                <span style={{
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                  color: 'var(--text-faint)', minWidth: 24,
+                }}>
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 500,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>{t.name}</div>
+                  <div style={{
+                    fontSize: 12, color: 'var(--text-dim)', fontStyle: 'italic',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>{t.artists}</div>
+                </div>
+                <select
+                  value={truth}
+                  onChange={(e) => adminAssign(t.id, e.target.value)}
+                  className={`ml-guess-select ${truth ? 'has-value' : ''}`}
+                  style={{
+                    minWidth: 160,
+                    borderColor: isUnclaimed ? 'var(--red)' : undefined,
+                    color: isUnclaimed ? 'var(--red)' : undefined,
+                  }}
+                >
+                  <option value="">— unclaimed —</option>
+                  {game.players.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-faint)', fontStyle: 'italic' }}>
+          Tip: setting a song to a player automatically clears any other song that player had claimed.
+        </div>
+      </div>
+
+      <div className="ml-footer-actions">
+        <button className="ml-btn ml-btn-ghost" onClick={onBack}>← Back to playing</button>
+      </div>
+    </>
+  );
+}
+
 // ============ PLAYER GAME ============
-function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLeave, onUpdate, onReveal, onReset }) {
+function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLeave, onUpdate, onOpenAdmin }) {
   const myClaim = Object.entries(claims).find(([, p]) => p === currentPlayer)?.[0] || null;
   const myGuesses = allGuesses[currentPlayer] || {};
   const [saving, setSaving] = useState(false);
@@ -508,33 +778,15 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
     } catch (e) { alert(e.message); }
   };
 
-  // Admin-only: override the true submitter for any track. Used when someone
-  // didn't claim, claimed wrong, or never logged in.
-  const adminAssign = async (trackId, submitter) => {
-    try {
-      await apiPost('/api/admin-assign', {
-        actor: currentPlayer,
-        trackId,
-        submitter: submitter || null,
-      });
-      await onUpdate();
-    } catch (e) { alert(e.message); }
-  };
-
   const otherPlayers = game.players.filter((p) => p !== currentPlayer);
   const guessableCount = game.tracks.length - (myClaim ? 1 : 0);
   const guessedCount = Object.keys(myGuesses).filter((tid) => tid !== myClaim).length;
   const progress = guessableCount > 0 ? (guessedCount / guessableCount) * 100 : 0;
 
-  // Admin: compute completion stats
-  const totalPlayers = game.players.length;
-  const claimedPlayers = new Set(Object.values(claims));
-  const fullyDonePlayers = game.players.filter((p) => {
-    if (!claimedPlayers.has(p)) return false;
-    const g = allGuesses[p] || {};
-    return Object.keys(g).length >= game.tracks.length - 1;
-  });
-  const everyTrackClaimed = game.tracks.every((t) => claims[t.id]);
+  // Names this player has already used on any track — strict mode means
+  // each name can only appear in one dropdown at a time.
+  const usedGuesses = new Set(Object.values(myGuesses));
+  const availableLeft = otherPlayers.filter((p) => !usedGuesses.has(p)).length;
 
   return (
     <>
@@ -543,7 +795,7 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
         <h1 className="ml-heading">Claim yours. <em>Guess</em> the rest.</h1>
         <p className="ml-body">
           Pick the song <em>you</em> submitted (yellow button), then guess who submitted each other track.
-          You can change your picks any time before the reveal.
+          Each player can only be guessed once across all tracks — pick wisely!
         </p>
 
         <div className="ml-stats">
@@ -553,6 +805,9 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
           <div className="ml-stat">
             <span className="ml-stat-val">{guessedCount}/{guessableCount}</span> guesses made
           </div>
+          <div className="ml-stat">
+            <span className="ml-stat-val">{availableLeft}</span> names available
+          </div>
         </div>
         <div className="ml-progress">
           <div className="ml-progress-bar" style={{ width: `${progress}%` }} />
@@ -560,110 +815,16 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
       </div>
 
       {isAdmin && (
-        <div className="ml-card">
-          <div className="ml-section-label">Admin panel</div>
-          <h2 className="ml-heading" style={{ fontSize: 22 }}>Watch the <em>guesses</em> roll in</h2>
-
-          <div className="ml-stats">
-            <div className="ml-stat"><span className="ml-stat-val">{Object.keys(claims).length}/{totalPlayers}</span> claimed</div>
-            <div className="ml-stat"><span className="ml-stat-val">{fullyDonePlayers.length}/{totalPlayers}</span> finished</div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-            {game.players.map((p) => {
-              const hasClaim = claimedPlayers.has(p);
-              const guessCount = Object.keys(allGuesses[p] || {}).length;
-              const need = game.tracks.length - 1;
-              const done = hasClaim && guessCount >= need;
-              return (
-                <span key={p} className={`ml-player-tag ${done ? 'done' : ''}`}>
-                  {done ? '✓' : '•'} {p}
-                  {!done && (
-                    <span style={{ opacity: 0.6 }}>
-                      ({hasClaim ? '★' : '–'}/{guessCount}/{need})
-                    </span>
-                  )}
-                </span>
-              );
-            })}
-          </div>
-
-          {!everyTrackClaimed && (
-            <div className="ml-info-box" style={{ marginTop: 16 }}>
-              <strong style={{ color: 'var(--gold)' }}>Heads up:</strong>{' '}
-              {game.tracks.length - Object.keys(claims).length} track(s) still unclaimed.
-              You can reveal anyway — those rows will show &quot;unknown&quot; as the truth.
+        <div className="ml-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div className="ml-section-label" style={{ marginBottom: 6 }}>You&apos;re the admin</div>
+            <div style={{ fontSize: 14, color: 'var(--text-dim)' }}>
+              Player progress, reveal, reset, and manage players live in the admin tools.
             </div>
-          )}
-
-          <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="ml-btn ml-btn-primary" onClick={onReveal}>
-              Reveal results →
-            </button>
-            <button className="ml-btn ml-btn-ghost ml-btn-danger" onClick={onReset}>
-              Reset round
-            </button>
           </div>
-        </div>
-      )}
-
-      {isAdmin && (
-        <div className="ml-card">
-          <div className="ml-section-label">Truth ledger · admin override</div>
-          <h2 className="ml-heading" style={{ fontSize: 22 }}>Set the <em>real</em> submitter</h2>
-          <p className="ml-body" style={{ fontSize: 14 }}>
-            Each row shows what a player claimed as theirs. If someone didn&apos;t claim, or
-            claimed wrong, set the truth here. This is what scoring uses at reveal time —
-            your overrides take precedence over player claims.
-          </p>
-          <div style={{ marginTop: 8 }}>
-            {game.tracks.map((t, i) => {
-              const truth = claims[t.id] || '';
-              const isUnclaimed = !truth;
-              return (
-                <div key={t.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '10px 0', borderBottom: '1px solid var(--line)',
-                  flexWrap: 'wrap',
-                }}>
-                  <span style={{
-                    fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-                    color: 'var(--text-faint)', minWidth: 24,
-                  }}>
-                    {String(i + 1).padStart(2, '0')}
-                  </span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 500,
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                    }}>{t.name}</div>
-                    <div style={{
-                      fontSize: 12, color: 'var(--text-dim)', fontStyle: 'italic',
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                    }}>{t.artists}</div>
-                  </div>
-                  <select
-                    value={truth}
-                    onChange={(e) => adminAssign(t.id, e.target.value)}
-                    className={`ml-guess-select ${truth ? 'has-value' : ''}`}
-                    style={{
-                      minWidth: 160,
-                      borderColor: isUnclaimed ? 'var(--red)' : undefined,
-                      color: isUnclaimed ? 'var(--red)' : undefined,
-                    }}
-                  >
-                    <option value="">— unclaimed —</option>
-                    {game.players.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-faint)', fontStyle: 'italic' }}>
-            Tip: setting a song to a player automatically clears any other song that player had claimed (each player owns one song).
-          </div>
+          <button className="ml-btn ml-btn-primary" onClick={onOpenAdmin}>
+            ★ Open admin tools →
+          </button>
         </div>
       )}
 
@@ -701,9 +862,11 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
                     onChange={(e) => setMyGuess(track.id, e.target.value)}
                   >
                     <option value="">Guess who…</option>
-                    {otherPlayers.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
+                    {otherPlayers
+                      .filter((p) => !usedGuesses.has(p) || p === guess)
+                      .map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
                   </select>
                 )}
               </div>
