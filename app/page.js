@@ -149,6 +149,14 @@ export default function Page() {
           isAdmin={isMeAdmin}
           currentPlayer={currentPlayer}
           onBack={() => setView(currentPlayer ? 'playerGame' : 'join')}
+          onAssign={async (trackId, submitter) => {
+            try {
+              await apiPost('/api/admin-assign', {
+                actor: currentPlayer, trackId, submitter: submitter || null,
+              });
+              await refreshState();
+            } catch (e) { alert(e.message); }
+          }}
           onUnreveal={async () => {
             try {
               await apiPost('/api/reveal', { actor: currentPlayer, revealed: false });
@@ -500,6 +508,19 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
     } catch (e) { alert(e.message); }
   };
 
+  // Admin-only: override the true submitter for any track. Used when someone
+  // didn't claim, claimed wrong, or never logged in.
+  const adminAssign = async (trackId, submitter) => {
+    try {
+      await apiPost('/api/admin-assign', {
+        actor: currentPlayer,
+        trackId,
+        submitter: submitter || null,
+      });
+      await onUpdate();
+    } catch (e) { alert(e.message); }
+  };
+
   const otherPlayers = game.players.filter((p) => p !== currentPlayer);
   const guessableCount = game.tracks.length - (myClaim ? 1 : 0);
   const guessedCount = Object.keys(myGuesses).filter((tid) => tid !== myClaim).length;
@@ -586,6 +607,66 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
         </div>
       )}
 
+      {isAdmin && (
+        <div className="ml-card">
+          <div className="ml-section-label">Truth ledger · admin override</div>
+          <h2 className="ml-heading" style={{ fontSize: 22 }}>Set the <em>real</em> submitter</h2>
+          <p className="ml-body" style={{ fontSize: 14 }}>
+            Each row shows what a player claimed as theirs. If someone didn&apos;t claim, or
+            claimed wrong, set the truth here. This is what scoring uses at reveal time —
+            your overrides take precedence over player claims.
+          </p>
+          <div style={{ marginTop: 8 }}>
+            {game.tracks.map((t, i) => {
+              const truth = claims[t.id] || '';
+              const isUnclaimed = !truth;
+              return (
+                <div key={t.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '10px 0', borderBottom: '1px solid var(--line)',
+                  flexWrap: 'wrap',
+                }}>
+                  <span style={{
+                    fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                    color: 'var(--text-faint)', minWidth: 24,
+                  }}>
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontFamily: 'Fraunces, serif', fontSize: 15, fontWeight: 500,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>{t.name}</div>
+                    <div style={{
+                      fontSize: 12, color: 'var(--text-dim)', fontStyle: 'italic',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>{t.artists}</div>
+                  </div>
+                  <select
+                    value={truth}
+                    onChange={(e) => adminAssign(t.id, e.target.value)}
+                    className={`ml-guess-select ${truth ? 'has-value' : ''}`}
+                    style={{
+                      minWidth: 160,
+                      borderColor: isUnclaimed ? 'var(--red)' : undefined,
+                      color: isUnclaimed ? 'var(--red)' : undefined,
+                    }}
+                  >
+                    <option value="">— unclaimed —</option>
+                    {game.players.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-faint)', fontStyle: 'italic' }}>
+            Tip: setting a song to a player automatically clears any other song that player had claimed (each player owns one song).
+          </div>
+        </div>
+      )}
+
       <div className="ml-card-flush">
         {game.tracks.map((track, i) => {
           const isMine = myClaim === track.id;
@@ -642,7 +723,7 @@ function PlayerGameView({ game, claims, allGuesses, currentPlayer, isAdmin, onLe
 }
 
 // ============ RESULTS ============
-function ResultsView({ game, claims, allGuesses, isAdmin, currentPlayer, onBack, onUnreveal, onReset }) {
+function ResultsView({ game, claims, allGuesses, isAdmin, currentPlayer, onBack, onAssign, onUnreveal, onReset }) {
   const scores = {};
   game.players.forEach((p) => { scores[p] = 0; });
   game.tracks.forEach((t) => {
@@ -716,10 +797,26 @@ function ResultsView({ game, claims, allGuesses, isAdmin, currentPlayer, onBack,
                   <div className="ml-track-artist">{t.artists}</div>
                 </div>
               </div>
-              <div className="ml-truth">
-                Submitted by → <span style={{ color: 'var(--accent-2)', fontStyle: 'normal' }}>
-                  {truth || '— unclaimed —'}
+              <div className="ml-truth" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span>
+                  Submitted by → <span style={{ color: 'var(--accent-2)', fontStyle: 'normal' }}>
+                    {truth || '— unclaimed —'}
+                  </span>
                 </span>
+                {isAdmin && onAssign && (
+                  <select
+                    value={truth || ''}
+                    onChange={(e) => onAssign(t.id, e.target.value)}
+                    className="ml-guess-select"
+                    style={{ minWidth: 140, marginLeft: 'auto' }}
+                    title="Admin: override the true submitter"
+                  >
+                    <option value="">— unclaimed —</option>
+                    {game.players.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                )}
               </div>
               {truth && (
                 <div className="ml-guesses-grid">

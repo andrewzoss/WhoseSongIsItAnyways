@@ -71,16 +71,16 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .ml-title {
-  font-family: 'Caprasimo', 'Cooper Black', Georgia, serif;
+  font-family: 'Limelight', 'Cooper Black', Georgia, serif;
   font-weight: 400;
-  font-size: 34px;
-  letter-spacing: -0.01em;
-  line-height: 1;
+  font-size: 30px;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
   text-transform: uppercase;
   color: var(--text);
 }
 .ml-title em {
-  font-style: italic;
+  font-style: normal;
   color: var(--accent);
   font-weight: 400;
 }
