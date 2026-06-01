@@ -1,34 +1,42 @@
 import { NextResponse } from 'next/server';
-import { getGame, getGuesses, setGuesses } from '@/lib/db';
+import { getLeague, activeRound, patchActiveRound } from '@/lib/db';
+import { ensureMigrated } from '@/lib/migrate';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(req) {
   try {
+    await ensureMigrated();
     const { player, trackId, guess } = await req.json();
-    const game = await getGame();
-    if (!game) return NextResponse.json({ ok: false, error: 'No game in progress' }, { status: 400 });
-    if (game.revealed) return NextResponse.json({ ok: false, error: 'Game already revealed' }, { status: 400 });
-    if (!game.players.includes(player)) {
-      return NextResponse.json({ ok: false, error: 'Unknown player' }, { status: 400 });
+    const league = await getLeague();
+    if (!league) {
+      return NextResponse.json({ ok: false, error: 'No league in progress' }, { status: 400 });
     }
-    if (!game.tracks.some((t) => t.id === trackId)) {
+    const round = activeRound(league);
+    if (!round) {
+      return NextResponse.json({ ok: false, error: 'No active round' }, { status: 400 });
+    }
+    if (round.revealed) {
+      return NextResponse.json({ ok: false, error: 'Round already revealed' }, { status: 400 });
+    }
+    if (!round.players.includes(player)) {
+      return NextResponse.json({ ok: false, error: 'You are not part of this round' }, { status: 400 });
+    }
+    if (!round.tracks.some((t) => t.id === trackId)) {
       return NextResponse.json({ ok: false, error: 'Unknown track' }, { status: 400 });
     }
-    if (guess && !game.players.includes(guess)) {
+    if (guess && !round.players.includes(guess)) {
       return NextResponse.json({ ok: false, error: 'Unknown guess target' }, { status: 400 });
     }
     if (guess === player) {
       return NextResponse.json({ ok: false, error: "Can't guess yourself" }, { status: 400 });
     }
 
-    const guesses = await getGuesses(player);
-
-    // Strict mode: each player can only be guessed once across all tracks.
-    // If this player already used `guess` on a different track, reject.
+    const myGuesses = { ...(round.guesses?.[player] || {}) };
+    // Strict mode: each player can only be guessed once per round
     if (guess) {
-      for (const [tid, existing] of Object.entries(guesses)) {
+      for (const [tid, existing] of Object.entries(myGuesses)) {
         if (tid !== trackId && existing === guess) {
           return NextResponse.json(
             { ok: false, error: `You already guessed ${guess} on another track. Clear that one first.` },
@@ -38,9 +46,11 @@ export async function POST(req) {
       }
     }
 
-    if (guess) guesses[trackId] = guess;
-    else delete guesses[trackId];
-    await setGuesses(player, guesses);
+    if (guess) myGuesses[trackId] = guess;
+    else delete myGuesses[trackId];
+
+    const guesses = { ...(round.guesses || {}), [player]: myGuesses };
+    await patchActiveRound({ guesses });
 
     return NextResponse.json({ ok: true });
   } catch (e) {

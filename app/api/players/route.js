@@ -1,40 +1,33 @@
 import { NextResponse } from 'next/server';
-import {
-  getGame, patchGame, getClaims, setClaims,
-  getGuesses, setGuesses, redis, sanitizeName, isAdmin,
-} from '@/lib/db';
+import { getLeague, patchLeague, patchActiveRound, activeRound, sanitizeName, isAdmin } from '@/lib/db';
+import { ensureMigrated } from '@/lib/migrate';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// POST /api/players — admin updates the player roster mid-round.
-// Body: { actor: <admin name>, players: <new full list of player names> }
-//
-// Adds and removes are diffed against the current roster. The actor (admin)
-// must remain in the new list — admin can't remove themselves.
+// Update the league-level roster. Changes also apply to the active round
+// (if not yet revealed). Past revealed rounds keep their original rosters
+// so historical scoring isn't broken.
 export async function POST(req) {
   try {
+    await ensureMigrated();
     const { actor, players: newPlayersRaw } = await req.json();
 
-    const game = await getGame();
-    if (!game) {
-      return NextResponse.json({ ok: false, error: 'No game in progress' }, { status: 400 });
+    const league = await getLeague();
+    if (!league) {
+      return NextResponse.json({ ok: false, error: 'No league in progress' }, { status: 400 });
     }
-    if (!isAdmin(game, actor)) {
+    if (!isAdmin(league, actor)) {
       return NextResponse.json({ ok: false, error: 'Only the admin can change the player list' }, { status: 403 });
     }
 
     if (!Array.isArray(newPlayersRaw)) {
       return NextResponse.json({ ok: false, error: 'players must be an array' }, { status: 400 });
     }
-
-    // Normalize: trim, drop empty, preserve order
     const newPlayers = newPlayersRaw.map((p) => String(p || '').trim()).filter(Boolean);
     if (newPlayers.length < 2) {
       return NextResponse.json({ ok: false, error: 'Need at least 2 players.' }, { status: 400 });
     }
-
-    // Uniqueness checks (case-insensitive + sanitized-name)
     const lower = new Set(newPlayers.map((p) => p.toLowerCase()));
     if (lower.size !== newPlayers.length) {
       return NextResponse.json({ ok: false, error: 'Player names must be unique.' }, { status: 400 });
@@ -46,58 +39,52 @@ export async function POST(req) {
         { status: 400 }
       );
     }
-
-    // Admin must remain in the list (otherwise the round becomes orphaned)
-    if (!newPlayers.includes(game.adminName)) {
+    if (!newPlayers.includes(league.adminName)) {
       return NextResponse.json(
-        { ok: false, error: `Admin (${game.adminName}) must remain in the list.` },
+        { ok: false, error: `Admin (${league.adminName}) must remain in the list.` },
         { status: 400 }
       );
     }
 
-    const removed = game.players.filter((p) => !newPlayers.includes(p));
-    const added = newPlayers.filter((p) => !game.players.includes(p));
+    const removed = league.players.filter((p) => !newPlayers.includes(p));
+    const added = newPlayers.filter((p) => !league.players.includes(p));
 
-    // 1) Clean up claims by removed players
-    if (removed.length > 0) {
-      const claims = await getClaims();
-      let claimsChanged = false;
-      for (const [tid, p] of Object.entries(claims)) {
-        if (removed.includes(p)) {
-          delete claims[tid];
-          claimsChanged = true;
+    // Update the global roster
+    league.players = newPlayers;
+
+    // Apply to the active round if it's unrevealed
+    const round = activeRound(league);
+    if (round && !round.revealed) {
+      // Sync round's roster to the new global roster
+      round.players = newPlayers;
+
+      // Clean up removed players' data from active round
+      if (removed.length > 0) {
+        const claims = { ...(round.claims || {}) };
+        for (const [tid, p] of Object.entries(claims)) {
+          if (removed.includes(p)) delete claims[tid];
         }
-      }
-      if (claimsChanged) await setClaims(claims);
-
-      // 2) Delete removed players' guess records
-      await Promise.all(removed.map((p) => redis().del(`guesses:${sanitizeName(p)}`)));
-
-      // 3) Scrub removed players from OTHER players' guesses (where they were
-      // guessed as a submitter). Leaving them in would cause scoring confusion
-      // since "Bob" no longer exists.
-      for (const p of newPlayers) {
-        const g = await getGuesses(p);
-        let changed = false;
-        for (const [tid, guess] of Object.entries(g)) {
-          if (removed.includes(guess)) {
-            delete g[tid];
-            changed = true;
+        const guesses = { ...(round.guesses || {}) };
+        // Drop removed players' guess records
+        for (const r of removed) delete guesses[r];
+        // Scrub removed names from remaining players' guesses
+        for (const p of newPlayers) {
+          if (!guesses[p]) continue;
+          const pg = { ...guesses[p] };
+          let changed = false;
+          for (const [tid, gx] of Object.entries(pg)) {
+            if (removed.includes(gx)) { delete pg[tid]; changed = true; }
           }
+          if (changed) guesses[p] = pg;
         }
-        if (changed) await setGuesses(p, g);
+        round.claims = claims;
+        round.guesses = guesses;
       }
+      league.rounds[league.activeRoundIdx] = round;
     }
 
-    // 4) Update the roster on the game
-    await patchGame({ players: newPlayers });
-
-    return NextResponse.json({
-      ok: true,
-      added,
-      removed,
-      total: newPlayers.length,
-    });
+    await patchLeague({ players: league.players, rounds: league.rounds });
+    return NextResponse.json({ ok: true, added, removed, total: newPlayers.length });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
   }

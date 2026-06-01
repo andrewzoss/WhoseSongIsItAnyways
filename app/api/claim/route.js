@@ -1,22 +1,31 @@
 import { NextResponse } from 'next/server';
-import { getGame, getClaims, setClaims, getGuesses, setGuesses } from '@/lib/db';
+import { getLeague, activeRound, patchActiveRound } from '@/lib/db';
+import { ensureMigrated } from '@/lib/migrate';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(req) {
   try {
+    await ensureMigrated();
     const { player, trackId } = await req.json();
-    const game = await getGame();
-    if (!game) return NextResponse.json({ ok: false, error: 'No game in progress' }, { status: 400 });
-    if (game.revealed) return NextResponse.json({ ok: false, error: 'Game already revealed' }, { status: 400 });
-    if (!game.players.includes(player)) {
-      return NextResponse.json({ ok: false, error: 'Unknown player' }, { status: 400 });
+    const league = await getLeague();
+    if (!league) {
+      return NextResponse.json({ ok: false, error: 'No league in progress' }, { status: 400 });
+    }
+    const round = activeRound(league);
+    if (!round) {
+      return NextResponse.json({ ok: false, error: 'No active round' }, { status: 400 });
+    }
+    if (round.revealed) {
+      return NextResponse.json({ ok: false, error: 'Round already revealed' }, { status: 400 });
+    }
+    if (!round.players.includes(player)) {
+      return NextResponse.json({ ok: false, error: 'You are not part of this round' }, { status: 400 });
     }
 
-    const claims = await getClaims();
+    const claims = { ...(round.claims || {}) };
 
-    // If someone else already claimed this track, reject.
     if (trackId && claims[trackId] && claims[trackId] !== player) {
       return NextResponse.json(
         { ok: false, error: `${claims[trackId]} already claimed that song.` },
@@ -29,23 +38,21 @@ export async function POST(req) {
       if (p === player) delete claims[tid];
     }
     if (trackId) {
-      // Verify trackId actually exists in this game
-      if (!game.tracks.some((t) => t.id === trackId)) {
+      if (!round.tracks.some((t) => t.id === trackId)) {
         return NextResponse.json({ ok: false, error: 'Unknown track' }, { status: 400 });
       }
       claims[trackId] = player;
     }
-    await setClaims(claims);
 
-    // If they just claimed a track, drop any guess they had for it (you don't guess yourself)
-    if (trackId) {
-      const guesses = await getGuesses(player);
-      if (guesses[trackId]) {
-        delete guesses[trackId];
-        await setGuesses(player, guesses);
-      }
+    const guesses = { ...(round.guesses || {}) };
+    // Players don't guess their own claim, so clear any stale guess for the new claim
+    if (trackId && guesses[player]?.[trackId]) {
+      const pg = { ...guesses[player] };
+      delete pg[trackId];
+      guesses[player] = pg;
     }
 
+    await patchActiveRound({ claims, guesses });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
